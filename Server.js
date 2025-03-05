@@ -74,10 +74,7 @@ async function sendPushNotificationBatch(userIds, title, body, data) {
     }
 }
 
-/** 
- * Function to Send Push Notifications via Firebase Cloud Messaging (FCM)
- */
-async function sendFCMNotificationBatch(userIds, title, body, data) {
+async function sendFCMNotificationBatch(userIds, title, body, data = {}) {
     try {
         for (const userId of userIds) {
             const pushTokenEntry = await PushToken.findOne({ userId });
@@ -87,8 +84,11 @@ async function sendFCMNotificationBatch(userIds, title, body, data) {
             }
 
             const message = {
-                notification: { title, body },
-                data,
+                data: {
+                    title,
+                    body,
+                    customData: JSON.stringify(data)
+                },
                 token: pushTokenEntry.pushToken,
             };
 
@@ -100,7 +100,6 @@ async function sendFCMNotificationBatch(userIds, title, body, data) {
         console.error("❌ Error sending FCM push notifications:", error);
     }
 }
-
 /**
  * Register User
  */
@@ -189,13 +188,12 @@ app.post('/send-notifications', async (req, res) => {
         const { userIds, title, body, data = {} } = req.body;
         if (!userIds || !title || !body) return res.status(400).json({ error: "Missing required fields" });
 
+        // Save notifications to the database
         const notifications = userIds.map(userId => ({ userId, title, body, data, sent: true }));
         await Notification.insertMany(notifications);
 
-        await Promise.all([
-            sendPushNotificationBatch(userIds, title, body, data),
-            sendFCMNotificationBatch(userIds, title, body, data)
-        ]);
+        // Send notifications using FCM
+        await sendFCMNotificationBatch(userIds, title, body, data);
 
         res.status(200).json({ message: "Notifications sent successfully" });
     } catch (error) {
@@ -204,7 +202,7 @@ app.post('/send-notifications', async (req, res) => {
 });
 
 /**
- * Retrieve Notifications
+ * Retrieve Notifications for history 
  */
 app.get('/notifications/:userId', async (req, res) => {
     try {
