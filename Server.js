@@ -166,8 +166,29 @@ app.post('/login', async (req, res) => {
 app.post('/save-push-token', async (req, res) => {
     try {
         const { userId, pushToken } = req.body;
-        if (!userId || !pushToken) return res.status(400).json({ error: "UserId and pushToken are required" });
 
+        // Validate request body
+        if (!userId || !pushToken) {
+            return res.status(400).json({ error: "UserId and pushToken are required" });
+        }
+
+        // Check if userId exists in User collection
+        const userExists = await User.findById(userId);
+        if (!userExists) {
+            return res.status(400).json({ error: "Invalid userId, user does not exist" });
+        }
+
+        // Check if the pushToken is already assigned to another user
+        const existingToken = await PushToken.findOne({ pushToken });
+
+        if (existingToken && existingToken.userId.toString() !== userId) {
+            return res.status(400).json({ 
+                error: "This push token is already assigned to another user", 
+                existingUserId: existingToken.userId 
+            });
+        }
+
+        // Save or update push token for the user
         await PushToken.findOneAndUpdate(
             { userId },
             { pushToken },
@@ -175,29 +196,68 @@ app.post('/save-push-token', async (req, res) => {
         );
 
         res.status(200).json({ message: "Push token saved successfully" });
+
     } catch (error) {
-        res.status(500).json({ error: "Failed to save push token", details: error.message });
+        res.status(500).json({ 
+            error: "Failed to save push token", 
+            details: error.message 
+        });
     }
 });
-
 /**
  * Send Bulk Notifications
  */
 app.post('/send-notifications', async (req, res) => {
     try {
         const { userIds, title, body, data = {} } = req.body;
-        if (!userIds || !title || !body) return res.status(400).json({ error: "Missing required fields" });
+
+        // Validate request body
+        if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+            return res.status(400).json({ error: "Invalid or missing userIds" });
+        }
+        if (!title || !body) {
+            return res.status(400).json({ error: "Title and body are required" });
+        }
+
+        // Validate userIds exist in the PushToken collection
+        const existingTokens = await PushToken.find({ userId: { $in: userIds } }, 'userId');
+        const validUserIds = existingTokens.map(token => token.userId.toString());
+        const invalidUserIds = userIds.filter(id => !validUserIds.includes(id));
+
+        if (invalidUserIds.length > 0) {
+            return res.status(400).json({ 
+                error: "Some userIds do not have registered push tokens", 
+                invalidUserIds 
+            });
+        }
 
         // Save notifications to the database
-        const notifications = userIds.map(userId => ({ userId, title, body, data, sent: true }));
+        const notifications = validUserIds.map(userId => ({
+            userId,
+            title,
+            body,
+            data,
+            sent: true
+        }));
         await Notification.insertMany(notifications);
 
         // Send notifications using FCM
-        await sendFCMNotificationBatch(userIds, title, body, data);
+        try {
+            await sendFCMNotificationBatch(validUserIds, title, body, data);
+        } catch (fcmError) {
+            return res.status(500).json({ 
+                error: "Failed to send FCM notifications", 
+                details: fcmError.message 
+            });
+        }
 
         res.status(200).json({ message: "Notifications sent successfully" });
+
     } catch (error) {
-        res.status(500).json({ error: "Failed to send notifications", details: error.message });
+        res.status(500).json({ 
+            error: "Internal server error", 
+            details: error.message 
+        });
     }
 });
 
