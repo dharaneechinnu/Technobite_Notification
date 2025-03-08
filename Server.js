@@ -185,7 +185,8 @@ app.post('/save-push-token', async (req, res) => {
         }
 
         // Check if userId exists in User collection
-        const userExists = await User.findById(userId);
+        const userExists = await User.findOne({studentId : userId});
+  
         if (!userExists) {
             return res.status(400).json({ error: "Invalid userId, user does not exist" });
         }
