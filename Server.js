@@ -4,6 +4,8 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Expo } = require('expo-server-sdk');
 const admin = require('firebase-admin');
+const axios = require('axios'); // Added axios import at the top
+
 require('dotenv').config();
 
 // Import Models
@@ -32,107 +34,161 @@ mongoose.connect(process.env.MONGODB_URL)
     });
 
 /** 
- * Function to Send Push Notifications via Expo
+ * Function to Send Push Notifications via FCM
  */
-
-
 async function sendFCMNotificationBatch(userIds, title, body, data = {}) {
-    
     try {
         for (const userId of userIds) {
-         const pte = await PushToken.findOne({ userId : userId });
-            
+            const pte = await PushToken.findOne({ userId: userId });
+                
             if (!pte) {
                 console.warn(`⚠️ No FCM push token found for user: ${userId}`);
                 continue;
             }
             const message = {
-             token: pte.pushToken,
-             notification: {
-               title: title,
-               body: body,
-             },
-             data: {
-               customData: "Crescent Notification",
-             },
-           };
-           
-           admin
-             .messaging()
-             .send(message)
-             .then((response) => {
-               console.log("Successfully sent message:", response);
-             })
-             .catch((error) => {
-               console.error("Error sending message:", error);
-             });
-    }} catch (error) {
+                token: pte.pushToken,
+                notification: {
+                    title: title,
+                    body: body,
+                },
+                data: {
+                    customData: "Crescent Notification",
+                    ...data
+                },
+            };
+            
+            admin
+                .messaging()
+                .send(message)
+                .then((response) => {
+                    console.log("Successfully sent message:", response);
+                })
+                .catch((error) => {
+                    console.error("Error sending message:", error);
+                });
+        }
+    } catch (error) {
         console.error("❌ Error sending FCM push notifications:", error);
     }
 }
+
+/**
+ * Function to Send Push Notifications via Expo
+ */
+async function sendPushNotificationBatch(userIds, title, body, data) {
+    try {
+        let messages = [];
+
+        for (const userId of userIds) {
+            const pushTokenEntry = await PushToken.findOne({ userId });
+            
+            if (!pushTokenEntry) {
+                console.warn(`⚠️ No Expo push token found for user: ${userId}`);
+                continue;
+            }
+            if (!Expo.isExpoPushToken(pushTokenEntry.pushToken)) {
+                console.warn(`⚠️ Invalid Expo push token: ${pushTokenEntry.pushToken}`);
+                continue;
+            }
+
+            messages.push({
+                to: pushTokenEntry.pushToken,
+                sound: 'default',
+                title,
+                body,
+                data,
+            });
+        }
+
+        if (messages.length === 0) {
+            console.warn("⚠️ No valid push tokens found for Expo notifications.");
+            return;
+        }
+
+        let chunks = expo.chunkPushNotifications(messages);
+        for (let chunk of chunks) {
+            await expo.sendPushNotificationsAsync(chunk);
+        }
+
+        console.log(`✅ Expo notifications sent to ${messages.length} users`);
+    } catch (error) {
+        console.error("❌ Error sending Expo push notifications:", error);
+    }
+}
+
+/**
+ * Fetch school users from API
+ */
+async function fetchSchoolUsers() {
+    try {
+        const formData = new FormData();
+        formData.append('api_key', process.env.API_KEY); // Use environment variable for security
+
+        // Make the POST request
+        const response = await axios.post('https://app.edisha.org/index.php/resource/GetUsers', formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data'
+            }
+        });
+
+        if (response.data.status && Array.isArray(response.data.data)) {
+            return response.data.data;
+        }
+        
+        console.error("❌ Invalid response from school API:", response.data);
+        return [];
+    } catch (error) {
+        console.error("❌ Error fetching school users:", error);
+        return [];
+    }
+}
+
 /**
  * Register User
  */
-
-async function sendPushNotificationBatch(userIds, title, body, data) {
- try {
-     let messages = [];
-
-     for (const userId of userIds) {
-         const pushTokenEntry = await PushToken.findOne({ userId });
-         
-         if (!pushTokenEntry) {
-             console.warn(`⚠️ No Expo push token found for user: ${userId}`);
-             continue;
-         }
-         if (!Expo.isExpoPushToken(pushTokenEntry.pushToken)) {
-             console.warn(`⚠️ Invalid Expo push token: ${pushTokenEntry.pushToken}`);
-             continue;
-         }
-
-         messages.push({
-             to: pushTokenEntry.pushToken,
-             sound: 'default',
-             title,
-             body,
-             data,
-         });
-     }
-
-     if (messages.length === 0) {
-         console.warn("⚠️ No valid push tokens found for Expo notifications.");
-         return;
-     }
-
-     let chunks = expo.chunkPushNotifications(messages);
-     for (let chunk of chunks) {
-         await expo.sendPushNotificationsAsync(chunk);
-     }
-
-     console.log(`✅ Expo notifications sent to ${messages.length} users`);
- } catch (error) {
-     console.error("❌ Error sending Expo push notifications:", error);
- }
-}
-
+// Register endpoint
 app.post('/register', async (req, res) => {
     try {
         const { studentId, password } = req.body;
+
         if (!studentId || !password) {
             return res.status(400).json({ error: "Student ID and password are required" });
         }
 
-        const existingUser = await User.findOne({ studentId });
-        if (existingUser) {
-            return res.status(400).json({ error: "Student already exists" });
+        // Fetch valid users from school database
+        let schoolUsers;
+        try {
+            schoolUsers = await fetchSchoolUsers();
+            if (!Array.isArray(schoolUsers) || schoolUsers.length === 0) {
+                return res.status(500).json({ error: "Failed to retrieve student data" });
+            }
+        } catch (error) {
+            console.error("Error fetching school students:", error);
+            return res.status(500).json({ error: "Error verifying student with school database" });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        // Validate studentId
+        const isValidStudent = schoolUsers.some(user => user.user_id?.toString() === studentId.toString());
+        if (!isValidStudent) {
+            return res.status(403).json({ error: "Not a registered school student" });
+        }
+
+        // Check if student already registered
+        const existingUser = await User.findOne({ studentId });
+        if (existingUser) {
+            return res.status(400).json({ error: "Student already registered" });
+        }
+
+        // Fix: Ensure password is a string before hashing
+        const hashedPassword = await bcrypt.hash(String(password), 10);
+
+        // Register the student
         const newUser = new User({ studentId, password: hashedPassword });
         await newUser.save();
 
         res.status(201).json({ message: "Student registered successfully" });
     } catch (error) {
+        console.error("Registration error:", error);
         res.status(500).json({ error: "Registration failed", details: error.message });
     }
 });
@@ -165,7 +221,7 @@ app.post('/login', async (req, res) => {
         // Generate JWT token
         const token = jwt.sign({ studentId: user.studentId }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
-        res.status(200).json({ message: "Login successful", token });
+        res.status(200).json({ message: "Login successful", token, userId: user.studentId });
     } catch (error) {
         console.error("❌ Login Error:", error);
         res.status(500).json({ error: "Login failed", details: error.message });
@@ -185,7 +241,7 @@ app.post('/save-push-token', async (req, res) => {
         }
 
         // Check if userId exists in User collection
-        const userExists = await User.findOne({studentId : userId});
+        const userExists = await User.findOne({studentId: userId});
   
         if (!userExists) {
             return res.status(400).json({ error: "Invalid userId, user does not exist" });
@@ -217,6 +273,7 @@ app.post('/save-push-token', async (req, res) => {
         });
     }
 });
+
 /**
  * Send Bulk Notifications
  */
@@ -269,6 +326,69 @@ app.post('/send-notifications', async (req, res) => {
     } catch (error) {
         res.status(500).json({ 
             error: "Internal server error", 
+            details: error.message 
+        });
+    }
+});
+
+/**
+ * Send notifications to all school users
+ */
+app.post('/notify-all-school-users', async (req, res) => {
+    try {
+        const { title, body, data = {} } = req.body;
+        
+        if (!title || !body) {
+            return res.status(400).json({ error: "Title and body are required" });
+        }
+        
+        // Get all users from school database
+        const schoolUsers = await fetchSchoolUsers();
+        if (!schoolUsers || !schoolUsers.length) {
+            return res.status(404).json({ error: "No users found in school database" });
+        }
+        
+        // Get all registered users from our database
+        const registeredUsers = await User.find({}, 'studentId');
+        const registeredUserIds = registeredUsers.map(user => user.studentId);
+        
+        if (!registeredUserIds.length) {
+            return res.status(404).json({ error: "No registered users found" });
+        }
+        
+        // Find users who are both in school database and registered in our app
+        const schoolUserIds = schoolUsers.map(user => user.user_id.toString());
+        const validUserIds = registeredUserIds.filter(id => 
+            schoolUserIds.includes(id.toString())
+        );
+        
+        if (!validUserIds.length) {
+            return res.status(404).json({ error: "No valid users found to send notifications" });
+        }
+        
+        // Send notifications to users
+        await sendFCMNotificationBatch(validUserIds, title, body, data);
+        
+        // Save notifications to database
+        const notifications = validUserIds.map(userId => ({
+            userId,
+            title,
+            body,
+            data,
+            sent: true
+        }));
+        await Notification.insertMany(notifications);
+        
+        res.status(200).json({ 
+            message: "Notifications sent successfully to school users", 
+            sentTo: validUserIds.length,
+            totalSchoolUsers: schoolUserIds.length,
+            totalRegisteredUsers: registeredUserIds.length
+        });
+        
+    } catch (error) {
+        res.status(500).json({ 
+            error: "Failed to send notifications to school users", 
             details: error.message 
         });
     }
