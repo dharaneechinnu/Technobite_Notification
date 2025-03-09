@@ -37,84 +37,44 @@ mongoose.connect(process.env.MONGODB_URL)
  * Function to Send Push Notifications via FCM
  */
 async function sendFCMNotificationBatch(userIds, title, body, data = {}) {
-    try {
-        for (const userId of userIds) {
-            const pte = await PushToken.findOne({ userId: userId });
-                
-            if (!pte) {
-                console.warn(`⚠️ No FCM push token found for user: ${userId}`);
-                continue;
-            }
-            const message = {
-                token: pte.pushToken,
-                notification: {
-                    title: title,
-                    body: body,
-                },
-                data: {
-                    customData: "Crescent Notification",
-                    ...data
-                },
-            };
-            
-            admin
-                .messaging()
-                .send(message)
-                .then((response) => {
-                    console.log("Successfully sent message:", response);
-                })
-                .catch((error) => {
-                    console.error("Error sending message:", error);
-                });
-        }
-    } catch (error) {
-        console.error("❌ Error sending FCM push notifications:", error);
-    }
+    
+ try {
+     for (const userId of userIds) {
+      const pte = await PushToken.findOne({ userId : userId });
+         
+         if (!pte) {
+             console.warn(`⚠️ No FCM push token found for user: ${userId}`);
+             continue;
+         }
+         const message = {
+          token: pte.pushToken,
+          notification: {
+            title: title,
+            body: body,
+          },
+          data: {
+            customData: "Crescent Notification",
+          },
+        };
+        
+        admin
+          .messaging()
+          .send(message)
+          .then((response) => {
+            console.log("Successfully sent message:", response);
+          })
+          .catch((error) => {
+            console.error("Error sending message:", error);
+          });
+ }} catch (error) {
+     console.error("❌ Error sending FCM push notifications:", error);
+ }
 }
 
 /**
  * Function to Send Push Notifications via Expo
  */
-async function sendPushNotificationBatch(userIds, title, body, data) {
-    try {
-        let messages = [];
 
-        for (const userId of userIds) {
-            const pushTokenEntry = await PushToken.findOne({ userId });
-            
-            if (!pushTokenEntry) {
-                console.warn(`⚠️ No Expo push token found for user: ${userId}`);
-                continue;
-            }
-            if (!Expo.isExpoPushToken(pushTokenEntry.pushToken)) {
-                console.warn(`⚠️ Invalid Expo push token: ${pushTokenEntry.pushToken}`);
-                continue;
-            }
-
-            messages.push({
-                to: pushTokenEntry.pushToken,
-                sound: 'default',
-                title,
-                body,
-                data,
-            });
-        }
-
-        if (messages.length === 0) {
-            console.warn("⚠️ No valid push tokens found for Expo notifications.");
-            return;
-        }
-
-        let chunks = expo.chunkPushNotifications(messages);
-        for (let chunk of chunks) {
-            await expo.sendPushNotificationsAsync(chunk);
-        }
-
-        console.log(`✅ Expo notifications sent to ${messages.length} users`);
-    } catch (error) {
-        console.error("❌ Error sending Expo push notifications:", error);
-    }
-}
 
 /**
  * Fetch school users from API
