@@ -3,10 +3,7 @@ const User = require('../Model/Student');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const axios = require('axios'); 
-
-
-
-
+const PushToken = require('../Model/PushToken');
 
 async function fetchSchoolUsers() {
     try {
@@ -31,8 +28,6 @@ async function fetchSchoolUsers() {
         return [];
     }
 }
-
-
 
 const UserLogin = async(req,res)=>{
     try {
@@ -64,52 +59,107 @@ const UserLogin = async(req,res)=>{
        }
 }
 
-const UserRegister = async(req,res)=>{
-     try {
-            const { studentId, password } = req.body;
-    
-            if (!studentId || !password) {
-                return res.status(400).json({ error: "Student ID and password are required" });
-            }
-    
-            // Fetch valid users from school database
-            let schoolUsers;
-            try {
-                schoolUsers = await fetchSchoolUsers();
-                if (!Array.isArray(schoolUsers) || schoolUsers.length === 0) {
-                    return res.status(500).json({ error: "Failed to retrieve student data" });
-                }
-            } catch (error) {
-                console.error("Error fetching school students:", error);
-                return res.status(500).json({ error: "Error verifying student with school database" });
-            }
-    
-            // Validate studentId
-            const isValidStudent = schoolUsers.some(user => user.user_id?.toString() === studentId.toString());
-            if (!isValidStudent) {
-                return res.status(403).json({ error: "Not a registered school student" });
-            }
-    
-            // Check if student already registered
-            const existingUser = await User.findOne({ studentId });
-            if (existingUser) {
-                return res.status(400).json({ error: "Student already registered" });
-            }
-    
-            // Fix: Ensure password is a string before hashing
-            const hashedPassword = await bcrypt.hash(String(password), 10);
-    
-            // Register the student
-            const newUser = new User({ studentId, password: hashedPassword });
-            await newUser.save();
-    
-            res.status(201).json({ message: "Student registered successfully" });
-        } catch (error) {
-            console.error("Registration error:", error);
-            res.status(500).json({ error: "Registration failed", details: error.message });
+const registerParent = async (req, res) => {
+    try {
+        const { name, phoneNumber, pushToken } = req.body;
+
+        if (!name || !phoneNumber || !pushToken) {
+            return res.status(400).json({ message: "Name, phone number, and push token are required." });
         }
-}
+
+        let parent = await PushToken.findOne({ phoneNumber });
+
+        if (parent) {
+            parent.name = name;
+            parent.pushToken = pushToken; // Update push token
+            await parent.save();
+        } else {
+            parent = new PushToken({
+                parentId: new mongoose.Types.ObjectId().toString(),
+                name,
+                phoneNumber,
+                pushToken,
+                students: []
+            });
+            await parent.save();
+        }
+
+        res.status(200).json({ message: "Parent registered successfully.", parent });
+    } catch (error) {
+        console.error("Error registering parent:", error);
+        res.status(500).json({ message: "Internal server error." });
+    }
+};
+
+const loginParent = async (req, res) => {
+    try {
+        const { phoneNumber } = req.body;
+        if (!phoneNumber) {
+            return res.status(400).json({ message: "Phone number is required." });
+        }
+
+        const parent = await PushToken.findOne({ phoneNumber });
+        if (!parent) {
+            return res.status(404).json({ message: "Parent not found. Please register first." });
+        }
+
+        res.status(200).json({ message: "Login successful.", parent });
+    } catch (error) {
+        console.error("Error logging in parent:", error);
+        res.status(500).json({ message: "Internal server error." });
+    }
+};
+
+const addStudent = async (req, res) => {
+    try {
+        const { phoneNumber, studentId, studentName } = req.body;
+
+        if (!phoneNumber || !studentId || !studentName) {
+            return res.status(400).json({ message: "Phone number, student ID, and student name are required." });
+        }
+
+        let parent = await PushToken.findOne({ phoneNumber });
+        if (!parent) {
+            return res.status(404).json({ message: "Parent not found. Please register first." });
+        }
+
+        // Check if the student already exists
+        const studentExists = parent.students.some(s => s.studentId === studentId);
+        if (!studentExists) {
+            parent.students.push({ studentId, studentName });
+            await parent.save();
+        }
+
+        res.status(200).json({ message: "Student added successfully.", parent });
+    } catch (error) {
+        console.error("Error adding student:", error);
+        res.status(500).json({ message: "Internal server error." });
+    }
+};
+
+const deleteStudent = async (req, res) => {
+    try {
+        const { phoneNumber, studentId } = req.body;
+
+        if (!phoneNumber || !studentId) {
+            return res.status(400).json({ message: "Phone number and student ID are required." });
+        }
+
+        let parent = await ParentPushToken.findOne({ phoneNumber });
+        if (!parent) {
+            return res.status(404).json({ message: "Parent not found." });
+        }
+
+        parent.students = parent.students.filter(student => student.studentId !== studentId);
+        await parent.save();
+
+        res.status(200).json({ message: "Student deleted successfully.", parent });
+    } catch (error) {
+        console.error("Error deleting student:", error);
+        res.status(500).json({ message: "Internal server error." });
+    }
+};
 
 
 
-module.exports={UserLogin,UserRegister}
+module.exports={registerParent, loginParent, addStudent,deleteStudent }

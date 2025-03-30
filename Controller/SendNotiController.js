@@ -2,7 +2,7 @@ require('dotenv').config();
 const Notification = require('../Model/Notification');
 const FB = require('../serviceAccountKey.json');
 const admin = require('firebase-admin');
-
+const PushToken = require('../Model/PushToken');
 
 admin.initializeApp({
     credential: admin.credential.cert(FB),
@@ -157,5 +157,44 @@ const SendNotificationToAll = async(req,res)=>{
     }
 }
 
+const sendFCMNotificationToParent = async (req, res) => {
+    try {
+        const { studentId, studentName, title, body, data = {} } = req.body;
 
-module.exports={sendNotification,SendNotificationToAll}
+        // Find all parents who have this student in their students array
+        const parentTokens = await PushToken.find({ 
+            "students.studentId": studentId 
+        });
+
+        if (parentTokens.length === 0) {
+            console.warn(`⚠️ No parent FCM push token found for student: ${studentId}`);
+            return res.status(404).json({ message: "No parent found for the given student." });
+        }
+
+        // Extract push tokens
+        const validTokens = parentTokens.map(parent => parent.pushToken);
+
+        if (validTokens.length === 0) {
+            return res.status(400).json({ message: "No valid FCM tokens found for parents." });
+        }
+
+        // Send notifications using FCM
+        try {
+            await sendFCMNotificationBatch(validTokens, title, `${studentName}: ${body}`, { studentId, studentName, ...data });
+        } catch (fcmError) {
+            return res.status(500).json({ 
+                error: "Failed to send FCM notifications", 
+                details: fcmError.message 
+            });
+        }
+
+        return res.status(200).json({ message: "Notifications sent successfully." });
+    } catch (error) {
+        console.error("❌ Error sending FCM push notifications to parents:", error);
+        return res.status(500).json({ message: "Internal server error." });
+    }
+};
+
+
+
+module.exports={sendNotification,SendNotificationToAll,sendFCMNotificationToParent}

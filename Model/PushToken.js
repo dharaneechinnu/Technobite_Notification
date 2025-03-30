@@ -1,7 +1,17 @@
+// ParentPushToken.js
 const mongoose = require('mongoose');
 
 const PushTokenSchema = new mongoose.Schema({
-    userId: {
+    parentId: {
+        type: String,
+        required: true,
+        unique: true
+    },
+    name: {
+        type: String,
+        required: true
+    },
+    phoneNumber: {
         type: String,
         required: true,
         unique: true
@@ -10,6 +20,16 @@ const PushTokenSchema = new mongoose.Schema({
         type: String,
         required: true
     },
+    students: [{
+        studentId: {
+            type: String,
+            required: true
+        },
+        studentName: {
+            type: String,
+            required: true
+        }
+    }],
     createdAt: {
         type: Date,
         default: Date.now
