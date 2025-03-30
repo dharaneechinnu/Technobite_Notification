@@ -2,7 +2,7 @@ require('dotenv').config();
 const Notification = require('../Model/Notification');
 const FB = require('../serviceAccountKey.json');
 const admin = require('firebase-admin');
-
+const PushToken = require('../Model/PushToken');
 
 admin.initializeApp({
     credential: admin.credential.cert(FB),
